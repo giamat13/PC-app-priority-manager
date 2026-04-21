@@ -470,14 +470,7 @@ def main():
                 print(f"\n{YELLOW}Cancelled by user.{RESET}")
                 break
 
-        print()
-        try:
-            again = input(f"{YELLOW}Change another process? (Enter=yes, n=no): {RESET}").strip().lower()
-        except KeyboardInterrupt:
-            break
-        if again == "n":
-            print(f"{GREEN}Goodbye!{RESET}")
-            break
+        print(f"\n{CYAN}Press Ctrl+C at any time to stop monitoring and restore all priorities.{RESET}")
 
 
 if __name__ == "__main__":
