@@ -29,7 +29,7 @@ PROTECTED_PROCESSES = {
     "Windows": {
         "system", "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe",
         "services.exe", "lsass.exe", "lsm.exe", "svchost.exe",
-        "dwm.exe", "registry",
+        "dwm.exe", "explorer.exe", "registry",
     },
     "Linux": {
         "init", "systemd", "kthreadd", "kworker", "ksoftirqd",
@@ -473,9 +473,142 @@ def main():
         print(f"\n{CYAN}Press Ctrl+C at any time to stop monitoring and restore all priorities.{RESET}")
 
 
+def is_number(s):
+    try:
+        v = int(s)
+        return 1 <= v <= 10
+    except (ValueError, TypeError):
+        return False
+
+
+def parse_cli_args(args):
+    """
+    Parse flexible CLI args into a list of (name, level_or_None) pairs.
+    Supports:
+      chrome              -> [("chrome", None)]   ask for priority
+      8                   -> [(None, 8)]           ask for name, skip priority
+      chrome 8            -> [("chrome", 8)]
+      chrome 8 vscode cmd 6  -> [("chrome", 8), ("vscode", 6), ("cmd", 6)]
+    """
+    pairs = []
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if is_number(token):
+            # bare number - apply to interactive name selection
+            pairs.append((None, int(token)))
+            i += 1
+        else:
+            # it's a name - look ahead for optional number
+            name = token
+            if i + 1 < len(args) and is_number(args[i + 1]):
+                pairs.append((name, int(args[i + 1])))
+                i += 2
+            else:
+                pairs.append((name, None))
+                i += 1
+    # if multiple names share a trailing number, distribute it
+    # e.g. "vscode cmd 6" -> vscode gets None initially, fix it
+    # re-scan: any name without a level inherits the next found level
+    result = []
+    pending_names = []
+    for name, level in pairs:
+        if name is None:
+            # bare number - skip (handled separately)
+            result.append((name, level))
+        elif level is not None:
+            # flush pending names with this level
+            for pn in pending_names:
+                result.append((pn, level))
+            pending_names = []
+            result.append((name, level))
+        else:
+            pending_names.append(name)
+    # any remaining pending names have no level -> will ask
+    for pn in pending_names:
+        result.append((pn, None))
+    return result
+
+
+def cli_apply(name, level):
+    """Find processes by name, optionally ask for level, then apply."""
+    if name is None:
+        # bare number was given - ask for process name interactively
+        try:
+            name = input(f"{BOLD}Enter process name: {RESET}").strip()
+        except KeyboardInterrupt:
+            return False
+        if not name:
+            return False
+
+    procs = find_processes(name)
+    if not procs:
+        print(f"{RED}No processes found matching '{name}'.{RESET}")
+        return False
+
+    valid_procs = [p for p in procs if not is_system_critical(p) and not is_protected(p)]
+    if not valid_procs:
+        print(f"{RED}All matching processes for '{name}' are protected - skipped.{RESET}")
+        return False
+
+    print(f"\n{CYAN}Found {len(valid_procs)} process(es) for '{name}':{RESET}")
+    for p in valid_procs:
+        try:
+            mem_mb = p.memory_info().rss / 1024 / 1024
+            print(f"  PID {p.pid:<8} {p.name():<30} {mem_mb:.1f} MB")
+        except Exception:
+            print(f"  PID {p.pid}")
+
+    if level is None:
+        level = pick_priority()
+        if level is None:
+            return False
+
+    if level in (1, 10):
+        action = "MAXIMUM boost" if level == 10 else "MINIMUM priority"
+        print(f"{RED}{BOLD}WARNING: {action} may affect system stability!{RESET}")
+        ans = input(f"{YELLOW}Are you sure? (yes/no): {RESET}").strip().lower()
+        if ans not in ("yes", "y"):
+            print(f"{YELLOW}Cancelled.{RESET}")
+            return False
+
+    for proc in valid_procs:
+        try:
+            apply_priorities(proc, level)
+        except psutil.NoSuchProcess:
+            print(f"{RED}PID {proc.pid} ended before changes could be applied.{RESET}")
+    return True
+
+
 if __name__ == "__main__":
     try:
-        main()
+        args = sys.argv[1:]
+
+        if args:
+            atexit.register(restore_all)
+            try:
+                signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
+            except (OSError, ValueError):
+                pass
+
+            monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
+            monitor_thread.start()
+
+            print_header()
+            pairs = parse_cli_args(args)
+            for name, level in pairs:
+                cli_apply(name, level)
+
+            total = len(_overrides)
+            if total:
+                print(f"\n{CYAN}Monitoring {total} process(es). Press Ctrl+C to stop and restore.{RESET}")
+                try:
+                    _monitor_stop.wait()
+                except KeyboardInterrupt:
+                    pass
+        else:
+            main()
+
     except KeyboardInterrupt:
         print(f"\n{YELLOW}Exiting.{RESET}")
     finally:
