@@ -29,7 +29,7 @@ PROTECTED_PROCESSES = {
     "Windows": {
         "system", "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe",
         "services.exe", "lsass.exe", "lsm.exe", "svchost.exe",
-        "dwm.exe", "explorer.exe", "registry",
+        "dwm.exe", "registry",
     },
     "Linux": {
         "init", "systemd", "kthreadd", "kworker", "ksoftirqd",
